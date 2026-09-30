@@ -3,13 +3,17 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Telegram collectible resale flow
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: telegram-auth
+    description: Telegram user account authorization for resale discovery
+  - name: resale
+    description: Collectible resale gift discovery and individually confirmed delivery
 paths:
   /healthz:
     get:
@@ -24,6 +28,147 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /telegram/user-auth/status:
+    get:
+      operationId: getTelegramAuthStatus
+      tags: [telegram-auth]
+      summary: Get Telegram authorization state
+      responses:
+        "200":
+          description: Current authorization step
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelegramAuthStatus"
+  /telegram/user-auth/send-code:
+    post:
+      operationId: sendTelegramAuthCode
+      tags: [telegram-auth]
+      summary: Send a Telegram login code to a phone number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TelegramPhoneInput"
+      responses:
+        "200":
+          description: Telegram code request result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelegramAuthResult"
+        "400":
+          description: Invalid phone number or Telegram rejected the request
+  /telegram/user-auth/verify-code:
+    post:
+      operationId: verifyTelegramAuthCode
+      tags: [telegram-auth]
+      summary: Verify a Telegram login code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TelegramCodeInput"
+      responses:
+        "200":
+          description: Code verification result, possibly requiring a 2FA password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelegramAuthResult"
+        "400":
+          description: Invalid or expired code
+  /telegram/user-auth/verify-password:
+    post:
+      operationId: verifyTelegramAuthPassword
+      tags: [telegram-auth]
+      summary: Complete Telegram authorization when 2FA is required
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TelegramPasswordInput"
+      responses:
+        "200":
+          description: Password verification result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelegramAuthResult"
+        "400":
+          description: Incorrect password
+  /resale/queue:
+    get:
+      operationId: getResaleQueue
+      tags: [resale]
+      summary: Get the next live collectible resale listing
+      description: Returns Telegram-discovered listings and server-tracked progress toward seven successful deliveries.
+      parameters:
+        - name: refresh
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: Refresh unpurchased listings from Telegram while retaining verified completed deliveries.
+      responses:
+        "200":
+          description: Current queue and progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResaleQueue"
+        "401":
+          description: Telegram user account has not been authorized
+  /resale/preflight:
+    post:
+      operationId: preflightResaleGift
+      tags: [resale]
+      summary: Recheck a live listing and retrieve the exact Telegram payment total
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResalePreflightInput"
+      responses:
+        "200":
+          description: Live payment preflight result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResalePreflight"
+        "401":
+          description: Telegram account or bot is unavailable
+        "409":
+          description: Listing is no longer available or cannot be purchased with Stars
+  /resale/purchase:
+    post:
+      operationId: confirmResaleGiftPurchase
+      tags: [resale]
+      summary: Individually confirm and send one collectible gift to the fixed recipient
+      description: This endpoint submits payment only when confirmed is true and the one-time preflight details still match Telegram.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResalePurchaseInput"
+      responses:
+        "200":
+          description: Telegram payment and delivery result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResalePurchaseResult"
+        "400":
+          description: Missing explicit confirmation or invalid preflight
+        "409":
+          description: Listing, price, or Stars balance changed before confirmation
+        "502":
+          description: Telegram did not confirm the payment and delivery
 components:
   schemas:
     HealthStatus:
@@ -33,4 +178,203 @@ components:
           type: string
       required:
         - status
-
+    TelegramAuthStatus:
+      type: object
+      properties:
+        configured:
+          type: boolean
+        authorized:
+          type: boolean
+        pending:
+          type: boolean
+        needsPassword:
+          type: boolean
+        phoneNumber:
+          type: ["string", "null"]
+        message:
+          type: string
+      required: [configured, authorized, pending, needsPassword, phoneNumber, message]
+    TelegramAuthResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [code_sent, password_required, authorized]
+        deliveryChannel:
+          type: ["string", "null"]
+          enum: [telegram_app, sms, other, null]
+        message:
+          type: string
+      required: [status, deliveryChannel, message]
+    TelegramPhoneInput:
+      type: object
+      properties:
+        phoneNumber:
+          type: string
+          minLength: 5
+          maxLength: 32
+      required: [phoneNumber]
+    TelegramCodeInput:
+      type: object
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 32
+      required: [code]
+    TelegramPasswordInput:
+      type: object
+      properties:
+        password:
+          type: string
+          minLength: 1
+          maxLength: 256
+      required: [password]
+    ResaleGiftAttribute:
+      type: object
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+      required: [name, value]
+    ResaleGift:
+      type: object
+      properties:
+        giftId:
+          type: string
+        slug:
+          type: string
+        title:
+          type: string
+        uniqueNumber:
+          type: integer
+        priceStars:
+          type: integer
+          minimum: 1
+        transferFeeStars:
+          type: ["integer", "null"]
+          minimum: 0
+        attributes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResaleGiftAttribute"
+        restrictions:
+          type: array
+          items:
+            type: string
+      required: [giftId, slug, title, uniqueNumber, priceStars, transferFeeStars, attributes, restrictions]
+    ResaleQueue:
+      type: object
+      properties:
+        authorized:
+          type: boolean
+        currentGift:
+          anyOf:
+            - $ref: "#/components/schemas/ResaleGift"
+            - type: "null"
+        completedCount:
+          type: integer
+          minimum: 0
+          maximum: 7
+        requestedCount:
+          type: integer
+          const: 7
+        availableCount:
+          type: integer
+          minimum: 0
+          maximum: 7
+        botBalanceStars:
+          type: ["integer", "null"]
+          minimum: 0
+        botBalanceVerified:
+          type: boolean
+        message:
+          type: string
+      required: [authorized, currentGift, completedCount, requestedCount, availableCount, botBalanceStars, botBalanceVerified, message]
+    ResalePreflightInput:
+      type: object
+      properties:
+        giftId:
+          type: string
+        slug:
+          type: string
+      required: [giftId, slug]
+    ResalePreflight:
+      type: object
+      properties:
+        ready:
+          type: boolean
+        gift:
+          anyOf:
+            - $ref: "#/components/schemas/ResaleGift"
+            - type: "null"
+        totalStars:
+          type: ["integer", "null"]
+          minimum: 0
+        botBalanceStars:
+          type: ["integer", "null"]
+          minimum: 0
+        botBalanceVerified:
+          type: boolean
+        confirmationNonce:
+          type: ["string", "null"]
+        recipientId:
+          type: string
+        message:
+          type: string
+      required: [ready, gift, totalStars, botBalanceStars, botBalanceVerified, confirmationNonce, recipientId, message]
+    ResalePurchaseInput:
+      type: object
+      properties:
+        giftId:
+          type: string
+        slug:
+          type: string
+        confirmationNonce:
+          type: string
+          minLength: 16
+        expectedTotalStars:
+          type: integer
+          minimum: 1
+        confirmed:
+          type: boolean
+          const: true
+      required: [giftId, slug, confirmationNonce, expectedTotalStars, confirmed]
+    ResalePurchaseResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        gift:
+          anyOf:
+            - $ref: "#/components/schemas/ResaleGift"
+            - type: "null"
+        recipientId:
+          type: string
+        totalStars:
+          type: ["integer", "null"]
+          minimum: 0
+        transactionId:
+          type: ["string", "null"]
+        completedCount:
+          type: integer
+          minimum: 0
+          maximum: 7
+        requestedCount:
+          type: integer
+          const: 7
+        nextGift:
+          anyOf:
+            - $ref: "#/components/schemas/ResaleGift"
+            - type: "null"
+        botBalanceStars:
+          type: ["integer", "null"]
+          minimum: 0
+        botBalanceVerified:
+          type: boolean
+        finished:
+          type: boolean
+        message:
+          type: string
+      required: [success, gift, recipientId, totalStars, transactionId, completedCount, requestedCount, nextGift, botBalanceStars, botBalanceVerified, finished, message]
